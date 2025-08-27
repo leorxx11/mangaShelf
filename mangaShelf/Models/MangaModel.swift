@@ -41,24 +41,30 @@ class MangaStore: ObservableObject {
     @Published var mangas: [Manga] = []
     
     init() {
-        // 不再从缓存加载
+        // 启动时从缓存加载已导入的漫画
+        mangas = MangaCache.shared.loadMangas()
     }
     
     func addManga(_ manga: Manga) {
         mangas.append(manga)
+        MangaCache.shared.saveMangas(mangas)
     }
     
     func deleteManga(_ manga: Manga) {
         mangas.removeAll { $0.id == manga.id }
+        MangaCache.shared.saveMangas(mangas)
     }
     
     func clearMangas() {
         mangas.removeAll()
         // 同时清除图片缓存
         ImageCacheManager.shared.clearCache()
+        // 清空持久化的导入列表
+        MangaCache.shared.clearCache()
     }
     
     func setMangas(_ newMangas: [Manga]) {
         mangas = newMangas
+        MangaCache.shared.saveMangas(newMangas)
     }
 }

@@ -14,16 +14,19 @@ extension Array {
 }
 
 struct MangaReaderView: View {
-    let manga: Manga
+    @State private var currentManga: Manga
+    let siblings: [Manga]?
     @StateObject private var pageLoader: MangaPageLoader
     @ObservedObject private var progressManager = ReadingProgressManager.shared
     @State private var scrollProgress: Double = 0.0
     @State private var currentVisiblePage: Int = 0
     @State private var isFullScreen = false
+    @State private var securityRootURL: URL?
     @Environment(\.dismiss) private var dismiss
     
-    init(manga: Manga) {
-        self.manga = manga
+    init(manga: Manga, siblings: [Manga]? = nil) {
+        self._currentManga = State(initialValue: manga)
+        self.siblings = siblings
         self._pageLoader = StateObject(wrappedValue: MangaPageLoader(manga: manga))
         print("📖 🎬 创建MangaReaderView - 漫画: \(manga.title)")
         print("📖 漫画类型: \(manga.type)")
@@ -39,16 +42,12 @@ struct MangaReaderView: View {
 
 
                 if pageLoader.isLoading {
-                    let _ = print("📖 🔄 显示加载视图")
                     loadingView
                 } else if let errorMessage = pageLoader.errorMessage {
-                    let _ = print("📖 ❌ 显示错误视图: \(errorMessage)")
                     errorView(errorMessage)
                 } else if pageLoader.pages.isEmpty {
-                    let _ = print("📖 📭 显示空视图 - 没有页面")
                     emptyView
                 } else {
-                    let _ = print("📖 📚 显示内容视图 - \(pageLoader.pages.count) 页")
                     webtoonReaderContent(geometry: geometry)
                 }
             }
@@ -58,18 +57,23 @@ struct MangaReaderView: View {
         // 隐藏系统返回箭头，使用自定义顶部栏返回
         .navigationBarBackButtonHidden(true)
         .onAppear {
-            print("📖 🚀 MangaReaderView.onAppear - 开始加载: \(manga.title)")
-            print("📖 漫画类型: \(manga.type)")
-            print("📖 漫画路径: \(manga.path.path)")
-            print("📖 根目录: \(manga.rootURL?.path ?? "nil")")
+            print("📖 🚀 MangaReaderView.onAppear - 开始加载: \(currentManga.title)")
+            print("📖 漫画类型: \(currentManga.type)")
+            print("📖 漫画路径: \(currentManga.path.path)")
+            print("📖 根目录: \(currentManga.rootURL?.path ?? "nil")")
             print("📖 页面加载器状态 - isLoading: \(pageLoader.isLoading), pages: \(pageLoader.pages.count), error: \(pageLoader.errorMessage ?? "nil")")
+            // 启用安全作用域访问（避免每张图片重复 start/stop 引起卡顿）
+            startSecurityAccess(for: currentManga)
             
             pageLoader.loadPages()
             loadSavedProgress()
         }
         .onDisappear {
-            print("📖 👋 MangaReaderView.onDisappear - 退出阅读: \(manga.title)")
+            print("📖 👋 MangaReaderView.onDisappear - 退出阅读: \(currentManga.title)")
             saveProgress()
+            // 结束安全作用域访问
+            securityRootURL?.stopAccessingSecurityScopedResource()
+            securityRootURL = nil
         }
         // 键盘事件暂不处理，避免低版本 API 报错
     }
@@ -81,6 +85,7 @@ struct MangaReaderView: View {
             }
             
             ScrollViewReader { proxy in
+                VStack(spacing: 0) {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 2) {
                         ForEach(Array(pageLoader.pages.enumerated()), id: \.offset) { index, page in
@@ -94,10 +99,7 @@ struct MangaReaderView: View {
                                     .frame(width: geometry.size.width, height: calculatedHeight)
                                     .clipped()
                                     .id(index)
-                                    .onAppear {
-                                        updateCurrentPage(index)
-                                        print("📖 显示第 \(index + 1) 页，图片尺寸: \(image.size)，计算高度: \(calculatedHeight)")
-                                    }
+                                    .onAppear { updateCurrentPage(index) }
                                     .onTapGesture {
                                         withAnimation(.easeInOut(duration: 0.3)) {
                                             isFullScreen.toggle()
@@ -127,15 +129,7 @@ struct MangaReaderView: View {
                                         }
                                     )
                                     .id(index)
-                                    .onAppear {
-                                        print("📖 ❌ 第 \(index + 1) 页加载失败")
-                                        if let page = pageLoader.pages[safe: index] {
-                                            print("📖 失败页面路径: \(page.path)")
-                                            print("📖 是否有数据: \(page.data != nil)")
-                                            print("📖 是否有URL: \(page.url != nil)")
-                                        }
-                                        updateCurrentPage(index)
-                                    }
+                                    .onAppear { updateCurrentPage(index) }
                                     .onTapGesture {
                                         withAnimation(.easeInOut(duration: 0.3)) {
                                             isFullScreen.toggle()
@@ -147,16 +141,28 @@ struct MangaReaderView: View {
                 }
                 .onAppear {
                     // 恢复阅读进度
-                    if let progress = progressManager.getProgress(for: manga) {
+                    if let progress = progressManager.getProgress(for: currentManga) {
                         withAnimation(.easeInOut(duration: 0.5)) {
                             proxy.scrollTo(progress.currentPage, anchor: .top)
                         }
                     }
                 }
-            }
-            
-            if !isFullScreen {
-                bottomProgressBar
+                .onReceive(pageLoader.$pages) { _ in
+                    if let progress = progressManager.getProgress(for: currentManga) {
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            proxy.scrollTo(progress.currentPage, anchor: .top)
+                        }
+                    } else if !pageLoader.pages.isEmpty {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(0, anchor: .top)
+                        }
+                    }
+                }
+                
+                if !isFullScreen {
+                    bottomProgressBar(proxy: proxy)
+                }
+                }
             }
         }
     }
@@ -236,52 +242,80 @@ struct MangaReaderView: View {
             Spacer()
             
             // 漫画标题
-            Text("\(manga.title)")
+            Text("\(currentManga.title)")
                 .font(.headline)
                 .foregroundColor(.white)
                 .lineLimit(1)
             
             Spacer()
             
-            // 全屏按钮
-            Button(isFullScreen ? "退出全屏" : "全屏") {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isFullScreen.toggle()
+            // 上/下一集切换（若有同系列）
+            HStack(spacing: 8) {
+                if let prev = previousManga {
+                    Button {
+                        switchToManga(prev)
+                    } label: {
+                        Text("上一集")
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                if let next = nextManga {
+                    Button {
+                        switchToManga(next)
+                    } label: {
+                        Text("下一集")
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
             }
-            .foregroundColor(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.white.opacity(0.2))
-            .cornerRadius(8)
-            .buttonStyle(PlainButtonStyle())
         }
         .padding()
         .background(Color.black.opacity(0.8))
     }
     
-    private var bottomProgressBar: some View {
-        VStack(spacing: 4) {
+    private func bottomProgressBar(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 8) {
             HStack {
                 Text("阅读进度: \(Int(scrollProgress * 100))%")
                     .font(.caption)
                     .foregroundColor(.white)
-                
+
                 Spacer()
-                
+
                 if !pageLoader.pages.isEmpty {
-                    Text("\(pageLoader.pages.count) 页")
+                    // 在右侧显示“当前页/总页数”
+                    Text("\(currentVisiblePage + 1)/\(pageLoader.pages.count) 页")
                         .font(.caption)
                         .foregroundColor(.white)
                 }
             }
-            
-            ProgressView(value: scrollProgress)
-                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
-                .background(Color.white.opacity(0.3))
+
+            ReaderProgressSlider(
+                progress: $scrollProgress,
+                totalPages: max(1, pageLoader.pages.count),
+                onSeek: { targetIndex in
+                    guard !pageLoader.pages.isEmpty else { return }
+                    let clamped = min(max(targetIndex, 0), pageLoader.pages.count - 1)
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        proxy.scrollTo(clamped, anchor: .top)
+                    }
+                }
+            )
         }
-        .padding()
-        .background(Color.black.opacity(0.8))
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.82))
     }
     
     private func updateCurrentPage(_ pageIndex: Int) {
@@ -297,7 +331,7 @@ struct MangaReaderView: View {
         
         // 保存阅读进度
         progressManager.updateProgress(
-            for: manga,
+            for: currentManga,
             currentPage: pageIndex,
             totalPages: pageLoader.pages.count
         )
@@ -307,7 +341,7 @@ struct MangaReaderView: View {
     
     private func loadSavedProgress() {
         // 进度恢复已在ScrollViewReader的onAppear中处理
-        if let progress = progressManager.getProgress(for: manga) {
+        if let progress = progressManager.getProgress(for: currentManga) {
             currentVisiblePage = progress.currentPage
             scrollProgress = Double(progress.currentPage) / Double(max(1, progress.totalPages - 1))
             print("📚 加载保存的阅读进度: 第 \(progress.currentPage + 1) 页")
@@ -317,6 +351,129 @@ struct MangaReaderView: View {
     private func saveProgress() {
         // 进度保存已在updateScrollProgress中处理
         print("📚 保存阅读进度")
+    }
+
+    private func switchToManga(_ newManga: Manga) {
+        // 切换前停止现有安全作用域访问
+        stopSecurityAccess()
+        currentVisiblePage = 0
+        scrollProgress = 0
+        currentManga = newManga
+        startSecurityAccess(for: newManga)
+        pageLoader.setManga(newManga)
+    }
+
+    private func startSecurityAccess(for manga: Manga) {
+        var root = manga.rootURL
+        if root == nil, manga.path.path.contains("/Documents/comic/") {
+            root = URL(fileURLWithPath: "/Users/leo/Documents/comic")
+        }
+        if let root {
+            if root.startAccessingSecurityScopedResource() {
+                securityRootURL = root
+            }
+        }
+    }
+
+    private func stopSecurityAccess() {
+        if let root = securityRootURL {
+            root.stopAccessingSecurityScopedResource()
+            securityRootURL = nil
+        }
+    }
+
+    // MARK: - 同系列上一/下一集
+    private var siblingIndex: Int? {
+        guard let siblings else { return nil }
+        // 先按 id 匹配，若失败则回退到路径匹配
+        if let byId = siblings.firstIndex(where: { $0.id == currentManga.id }) {
+            return byId
+        }
+        return siblings.firstIndex(where: { $0.path.path == currentManga.path.path })
+    }
+
+    private var previousManga: Manga? {
+        guard let siblings, let idx = siblingIndex, idx > 0 else { return nil }
+        return siblings[idx - 1]
+    }
+
+    private var nextManga: Manga? {
+        guard let siblings, let idx = siblingIndex, idx < siblings.count - 1 else { return nil }
+        return siblings[idx + 1]
+    }
+}
+
+// MARK: - 自定义可拖动进度条（圆角轨道 + 圆形滑块）
+private struct ReaderProgressSlider: View {
+    @Binding var progress: Double   // 0...1
+    let totalPages: Int
+    var onSeek: (Int) -> Void
+
+    @State private var draggingProgress: Double? = nil
+    @State private var lastSentIndex: Int = -1
+
+    private let trackHeight: CGFloat = 12
+    private let knobSize: CGFloat = 24
+    private let inset: CGFloat = 20  // 轨道左右内边距
+
+    var body: some View {
+        GeometryReader { geo in
+            let trackWidth = max(1, geo.size.width - inset * 2)
+            let effectiveProgress = CGFloat(draggingProgress ?? progress)
+            let knobX = inset + trackWidth * effectiveProgress
+
+            ZStack {
+                // 外层圆角底板（更贴近参考图效果）
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color.black.opacity(0.55))
+
+                // 轨道（圆头）
+                Capsule()
+                    .fill(Color.white.opacity(0.28))
+                    .frame(height: trackHeight)
+                    .padding(.horizontal, inset)
+
+                // 已读进度高亮（可按需保留/去除）
+                Capsule()
+                    .fill(Color.white.opacity(0.42))
+                    .frame(width: trackWidth * effectiveProgress, height: trackHeight)
+                    .padding(.leading, inset)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 滑块
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: knobSize, height: knobSize)
+                    .overlay(
+                        Circle().stroke(Color.black.opacity(0.35), lineWidth: 2)
+                    )
+                    .shadow(color: Color.black.opacity(0.6), radius: 3, x: 0, y: 0)
+                    .position(x: knobX, y: geo.size.height / 2)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let x = min(max(value.location.x - inset, 0), trackWidth)
+                        let p = Double(x / trackWidth)
+                        draggingProgress = p
+                        // 同步外部绑定，便于实时更新百分比文本
+                        progress = p
+
+                        let maxIndex = max(totalPages - 1, 0)
+                        let idx = Int(round(p * Double(maxIndex)))
+                        if idx != lastSentIndex {
+                            lastSentIndex = idx
+                            onSeek(idx)
+                        }
+                    }
+                    .onEnded { _ in
+                        if let p = draggingProgress { progress = p }
+                        draggingProgress = nil
+                    }
+            )
+        }
+        .frame(height: 44)
     }
 }
 

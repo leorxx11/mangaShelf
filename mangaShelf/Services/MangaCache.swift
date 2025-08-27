@@ -57,6 +57,8 @@ struct MangaCacheItem: Codable {
     let pathString: String
     let coverImagePathString: String?
     let rootURLString: String?
+    // 安全作用域书签，用于跨重启访问外部目录
+    let rootBookmarkData: Data?
     let subMangas: [MangaCacheItem]?
     
     init(from manga: Manga) {
@@ -65,6 +67,12 @@ struct MangaCacheItem: Codable {
         self.pathString = manga.path.path
         self.coverImagePathString = manga.coverImagePath?.path
         self.rootURLString = manga.rootURL?.path
+        // 为根目录创建安全作用域书签（若可用）
+        if let root = manga.rootURL {
+            self.rootBookmarkData = try? root.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        } else {
+            self.rootBookmarkData = nil
+        }
         self.subMangas = manga.subMangas?.map { MangaCacheItem(from: $0) }
     }
     
@@ -72,7 +80,17 @@ struct MangaCacheItem: Codable {
         let mangaType = type.toMangaType()
         let path = URL(fileURLWithPath: pathString)
         let coverImagePath = coverImagePathString.map { URL(fileURLWithPath: $0) }
-        let rootURL = rootURLString.map { URL(fileURLWithPath: $0) }
+        // 优先从书签恢复安全作用域 URL，其次回退到字符串路径
+        var rootURL: URL? = nil
+        if let bookmark = rootBookmarkData {
+            var isStale = false
+            if let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                rootURL = resolved
+            }
+        }
+        if rootURL == nil {
+            rootURL = rootURLString.map { URL(fileURLWithPath: $0) }
+        }
         let subMangasArray = subMangas?.compactMap { $0.toManga() }
         
         return Manga(
