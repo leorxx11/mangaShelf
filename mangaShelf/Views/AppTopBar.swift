@@ -6,39 +6,47 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct AppTopBar<Trailing: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String?
     let showBack: Bool
     let onBack: (() -> Void)?
     let trailing: Trailing
 
-    init(showBack: Bool = false, onBack: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
+    init(title: String? = nil, showBack: Bool = false, onBack: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
         self.showBack = showBack
         self.onBack = onBack
         self.trailing = trailing()
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if showBack {
-                Button("返回") { onBack?() }
-            } else {
-                // 占位保持左右对称
-                Color.clear.frame(width: 0, height: 0)
+        ZStack {
+            HStack(spacing: 12) {
+                if showBack {
+                    Button("返回") { onBack?() }
+                }
+                Spacer()
+                trailing
             }
-
-            Spacer()
-
-            trailing
+            if let title = title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+            }
         }
-        .frame(height: 44)
+        .frame(height: 36)
         .padding(.horizontal)
+        // 深色下避免系统 .bar 偏亮，手动压暗
+        .background(colorScheme == .dark ? Color.black.opacity(0.72) : Color(nsColor: .windowBackgroundColor))
+        .overlay(Divider().opacity(colorScheme == .dark ? 0.35 : 1), alignment: .bottom)
     }
 }
 
 extension AppTopBar where Trailing == EmptyView {
-    init(showBack: Bool = false, onBack: (() -> Void)? = nil) {
-        self.init(showBack: showBack, onBack: onBack) { EmptyView() }
+    init(title: String? = nil, showBack: Bool = false, onBack: (() -> Void)? = nil) {
+        self.init(title: title, showBack: showBack, onBack: onBack) { EmptyView() }
     }
 }
-

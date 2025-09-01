@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct SubShelfView: View {
     let seriesManga: Manga
@@ -13,12 +14,7 @@ struct SubShelfView: View {
         
     init(seriesManga: Manga) {
         self.seriesManga = seriesManga
-        print("📚 🏗️ 创建SubShelfView - 系列: \(seriesManga.title)")
-        print("📚 系列类型: \(seriesManga.type)")
-        print("📚 系列路径: \(seriesManga.path.path)")
-        print("📚 根目录: \(seriesManga.rootURL?.path ?? "nil")")
-        print("📚 子漫画数量: \(seriesManga.subMangas?.count ?? 0)")
-        print("📚 isSeries: \(seriesManga.isSeries)")
+        
     }
     
     private let columns = [
@@ -27,19 +23,18 @@ struct SubShelfView: View {
     
     var body: some View {
         VStack {
-            // 统一高度的上边栏，包含返回按钮
-            AppTopBar(showBack: true, onBack: {
-                print("🔙 SubShelf 顶部栏返回被点击")
+            // 统一高度的上边栏，包含返回与标题
+            AppTopBar(title: seriesManga.title, showBack: true, onBack: {
                 dismiss()
             }) { EmptyView() }
 
             if let subMangas = seriesManga.subMangas, !subMangas.isEmpty {
-                let _ = print("📚 📖 显示系列内容 - 共 \(subMangas.count) 个子漫画")
+                
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(subMangas) { manga in
                             NavigationLink {
-                                MangaReaderView(manga: manga)
+                                MangaReaderView(manga: manga, siblings: subMangas)
                             } label: {
                                 MangaCardView(manga: manga)
                                     .contentShape(Rectangle())
@@ -51,17 +46,18 @@ struct SubShelfView: View {
                     .padding()
                 }
             } else {
-                let _ = print("📚 📭 显示空状态 - 没有子漫画")
+                
                 emptyStateView
             }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         // 隐藏系统导航栏标题（不使用新 API）
         .navigationTitle("")
         // 隐藏系统返回箭头，使用自定义顶部栏返回
         .navigationBarBackButtonHidden(true)
+        .applyNavSlide()
         .onAppear {
-            print("📚 🚀 SubShelfView.onAppear - 系列: \(seriesManga.title)")
-            print("📚 子漫画数量: \(seriesManga.subMangas?.count ?? 0)")
+            
         }
     }
     
@@ -92,4 +88,15 @@ struct SubShelfView: View {
         path: URL(fileURLWithPath: "/test"),
         subMangas: []
     ))
+}
+
+// MARK: - Nav slide helper (macOS 14+)
+fileprivate extension View {
+    @ViewBuilder func applyNavSlide() -> some View {
+        if #available(macOS 14.0, *) {
+            self.navigationTransition(.automatic)
+        } else {
+            self
+        }
+    }
 }

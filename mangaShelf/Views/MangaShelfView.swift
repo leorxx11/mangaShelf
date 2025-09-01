@@ -6,12 +6,11 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 import AppKit
 
 struct MangaShelfView: View {
-    @StateObject private var mangaStore = MangaStore()
-    @State private var isShowingDirectoryPicker = false
+    @EnvironmentObject private var mangaStore: MangaStore
+    @EnvironmentObject private var uiState: UIState
     // 选中项改为直接使用 NavigationLink，不再需要选中状态
     // 保留占位，若后续需要可恢复
     // @State private var selectedManga: Manga?
@@ -22,25 +21,10 @@ struct MangaShelfView: View {
     ]
     
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $uiState.shelfPath) {
             VStack {
-                // 顶部操作栏：清除 / 导入（统一高度）
-                AppTopBar(showBack: false) {
-                    HStack(spacing: 12) {
-                        Button("清除") {
-                            mangaStore.clearMangas()
-                            ImageCacheManager.shared.clearCache()
-                        }
-                        .disabled(mangaStore.mangas.isEmpty)
-
-                        Button("导入") {
-                            print("🔥 导入按钮被点击")
-                            isShowingDirectoryPicker = true
-                            print("🔥 isShowingDirectoryPicker设置为: \(isShowingDirectoryPicker)")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
+                // 顶部操作栏：统一标题
+                AppTopBar(title: "书架", showBack: false) { EmptyView() }
 
                 if mangaStore.mangas.isEmpty {
                     emptyStateView
@@ -48,17 +32,22 @@ struct MangaShelfView: View {
                     mangaGridView
                 }
             }
+            .background(Color(nsColor: .windowBackgroundColor))
             // 隐藏系统导航栏标题，统一使用自定义上边栏（尽量不使用新API）
             .navigationTitle("")
-
-            .fileImporter(
-                isPresented: $isShowingDirectoryPicker,
-                allowedContentTypes: [UTType.folder],
-                allowsMultipleSelection: false
-            ) { result in
-                print("🔥 fileImporter 回调被触发")
-                handleDirectorySelection(result)
+            .navigationDestination(for: ShelfRoute.self) { route in
+                switch route {
+                case .subShelf(let m):
+                    SubShelfView(seriesManga: m)
+                case .read(let m):
+                    MangaReaderView(manga: m)
+                }
             }
+            .navigationTransition(.automatic)
+            .onChange(of: mangaStore.mangas.count) { _, newCount in
+                if newCount == 0 { uiState.shelfPath.removeAll() }
+            }
+
         }
         // 取消 .sheet 弹出方式
     }
@@ -74,7 +63,7 @@ struct MangaShelfView: View {
                 .font(.title2)
                 .foregroundColor(.gray)
 
-            Text("点击上方的\"导入\"按钮选择漫画目录")
+            Text("请在底部‘设置’页选择目录导入漫画")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -89,39 +78,29 @@ struct MangaShelfView: View {
             LazyVGrid(columns: columns, spacing: 20) {
                 ForEach(mangaStore.mangas) { manga in
                     if manga.isSeries {
-                        NavigationLink {
-                            SubShelfView(seriesManga: manga)
-                        } label: {
+                        NavigationLink(value: ShelfRoute.subShelf(manga)) {
                             MangaCardView(manga: manga)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainButtonStyle())
                         .contextMenu {
                             Button("删除", role: .destructive) {
-                                print("🗑️ 删除系列漫画: \(manga.title)")
                                 mangaStore.deleteManga(manga)
                             }
                         }
-                        .onAppear {
-                            print("🎨 显示系列漫画: \(manga.title), 类型: \(manga.type), isSeries: \(manga.isSeries), 子漫画数量: \(manga.subMangas?.count ?? 0)")
-                        }
+                        .onAppear { }
                     } else {
-                        NavigationLink {
-                            MangaReaderView(manga: manga)
-                        } label: {
+                        NavigationLink(value: ShelfRoute.read(manga)) {
                             MangaCardView(manga: manga)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainButtonStyle())
                         .contextMenu {
                             Button("删除", role: .destructive) {
-                                print("🗑️ 删除漫画: \(manga.title)")
                                 mangaStore.deleteManga(manga)
                             }
                         }
-                        .onAppear {
-                            print("🎨 显示普通漫画: \(manga.title), 类型: \(manga.type)")
-                        }
+                        .onAppear { }
                     }
                 }
             }
@@ -129,51 +108,17 @@ struct MangaShelfView: View {
         }
     }
     
-    private func handleDirectorySelection(_ result: Result<[URL], Error>) {
-        print("🔥 handleDirectorySelection 被调用")
-        switch result {
-        case .success(let urls):
-            print("🔥 选择文件成功，URL数量: \(urls.count)")
-            guard let selectedURL = urls.first else { 
-                print("🔥 没有选择任何URL")
-                return 
-            }
-            print("🔥 选择的目录: \(selectedURL.path)")
-            
-            // 启用安全作用域访问
-            guard selectedURL.startAccessingSecurityScopedResource() else {
-                print("🔥 无法启用安全作用域访问")
-                return
-            }
-            print("🔥 安全作用域访问已启用")
-            
-            Task {
-                print("🔥 开始扫描目录...")
-                let scannedMangas = MangaScanner.scanDirectory(at: selectedURL)
-                print("🔥 扫描到 \(scannedMangas.count) 个漫画")
-                
-                await MainActor.run {
-                    print("🔥 设置新的漫画列表，总数: \(scannedMangas.count)")
-                    mangaStore.setMangas(scannedMangas)
-                    print("🔥 漫画设置完成，总数: \(mangaStore.mangas.count)")
-                }
-                
-                // 停止安全作用域访问
-                selectedURL.stopAccessingSecurityScopedResource()
-                print("🔥 安全作用域访问已停止")
-            }
-            
-        case .failure(let error):
-            print("🔥 选择目录失败: \(error)")
-    }
-    
-}
 
 }
+
+// 使用 NavigationStack 路由的目标类型
+// 已迁移到 Models/ShelfRoute.swift 以便跨视图共享
 
 struct MangaCardView: View {
     let manga: Manga
     @ObservedObject private var progressManager = ReadingProgressManager.shared
+    @State private var thumbImage: NSImage?
+    @State private var isLoadingThumb = false
     
     var body: some View {
         VStack(spacing: 8) {
@@ -246,33 +191,123 @@ struct MangaCardView: View {
     
     @ViewBuilder
     private var coverImageView: some View {
-        if let coverPath = manga.coverImagePath,
-           let nsImage = loadImage(from: coverPath, rootURL: manga.rootURL) {
-            Image(nsImage: nsImage)
+        if let img = thumbImage {
+            Image(nsImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 120, height: 160)
                 .clipped()
                 .cornerRadius(8)
+        } else if let coverPath = manga.coverImagePath {
+            // 优先使用已缓存缩略图（针对 .image/大图）
+            if manga.type == .image,
+               let cached = ImageCacheManager.shared.getCachedThumbnail(for: coverPath, maxPixel: 320),
+               let thumb = ImageDecode.fromURL(cached) {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 160)
+                    .clipped()
+                    .cornerRadius(8)
+                    .onAppear { self.thumbImage = thumb }
+            } else if let nsImage = loadImage(from: coverPath, rootURL: manga.rootURL) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 160)
+                    .clipped()
+                    .cornerRadius(8)
+                    .onAppear { self.thumbImage = nsImage }
+            } else {
+                placeholderAndMaybeGenerate()
+            }
         } else {
             VStack {
-                Image(systemName: manga.type == .series ? "folder.fill" : "book.closed")
+                let iconName: String = {
+                    switch manga.type {
+                    case .series: return "folder.fill"
+                    case .zip:    return "book.closed"
+                    case .image:  return "photo"
+                    case .folder: return "folder"
+                    }
+                }()
+                Image(systemName: iconName)
                     .font(.system(size: 40))
                     .foregroundColor(manga.type == .series ? .blue : .gray)
-                
-                Text(manga.type == .zip ? "ZIP" : manga.type == .series ? "系列" : "文件夹")
+
+                let label: String = {
+                    switch manga.type {
+                    case .zip: return "ZIP"
+                    case .series: return "系列"
+                    case .image: return "图片"
+                    case .folder: return "文件夹"
+                    }
+                }()
+                Text(label)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
             .frame(width: 120, height: 160)
             .background(Color.gray.opacity(0.1))
             .cornerRadius(8)
+            .onAppear {
+                if manga.type == .image, let path = manga.coverImagePath {
+                    generateThumbIfNeeded(for: path, rootURL: manga.rootURL)
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func placeholderAndMaybeGenerate() -> some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.1))
+            .frame(width: 120, height: 160)
+            .overlay(Image(systemName: "photo").font(.system(size: 34)).foregroundColor(.gray))
+            .cornerRadius(8)
+            .onAppear {
+                if manga.type == .image, let path = manga.coverImagePath {
+                    generateThumbIfNeeded(for: path, rootURL: manga.rootURL)
+                }
+            }
+    }
+
+    private func generateThumbIfNeeded(for path: URL, rootURL: URL?) {
+        guard !isLoadingThumb else { return }
+        if let cached = ImageCacheManager.shared.getCachedThumbnail(for: path, maxPixel: 320),
+           let img = ImageDecode.fromURL(cached) {
+            self.thumbImage = img
+            return
+        }
+        isLoadingThumb = true
+        // 访问权限处理
+        var effectiveRoot = rootURL
+        if effectiveRoot == nil && !path.path.contains("/Caches/") {
+            if path.path.contains("/Documents/comic/") {
+                effectiveRoot = URL(fileURLWithPath: "/Users/leo/Documents/comic")
+            }
+        }
+        let rootForTask = effectiveRoot
+        let key = path.path + "_320"
+        Task { await ThumbGenerator.shared.generate(key: key) {
+            let accessed = (rootForTask?.startAccessingSecurityScopedResource() == true)
+            defer { if accessed, let r = rootForTask { r.stopAccessingSecurityScopedResource() } }
+            if let data = ImageDecode.thumbnailData(fromFile: path, maxPixel: 320),
+               let cachedURL = ImageCacheManager.shared.cacheThumbnail(data, for: path, maxPixel: 320) {
+                await MainActor.run {
+                    if let img = ImageDecode.fromURL(cachedURL) {
+                        self.thumbImage = img
+                    }
+                    self.isLoadingThumb = false
+                }
+            } else {
+                await MainActor.run { self.isLoadingThumb = false }
+            }
+        }}
     }
     
     private func loadImage(from url: URL, rootURL: URL?) -> NSImage? {
-        print("🖼️ 尝试加载图片: \(url.path)")
-        print("🖼️ rootURL: \(rootURL?.path ?? "nil")")
+        
         
         // 检查是否是缓存图片（不需要安全作用域访问）
         let isCachedImage = url.path.contains("/Caches/MangaCovers/")
@@ -284,47 +319,35 @@ struct MangaCardView: View {
             if url.path.contains("/Documents/comic/") {
                 let comicPath = "/Users/leo/Documents/comic"
                 effectiveRootURL = URL(fileURLWithPath: comicPath)
-                print("🖼️ 推断根目录: \(comicPath)")
+                
             }
         }
         
         // 如果不是缓存图片且有根目录URL，启用安全作用域访问
         let hasAccess = !isCachedImage && effectiveRootURL?.startAccessingSecurityScopedResource() == true
-        if hasAccess {
-            print("🖼️ 安全作用域访问已启用")
-        } else if isCachedImage {
-            print("🖼️ 加载缓存图片，无需安全作用域访问")
-        } else {
-            print("🖼️ 未启用安全作用域访问")
-        }
+        // no-op
         
         defer {
             if hasAccess {
                 effectiveRootURL?.stopAccessingSecurityScopedResource()
-                print("🖼️ 安全作用域访问已停止")
             }
         }
         
+        if let img = ImageDecode.fromURL(url) {
+            return img
+        }
         do {
             let data = try Data(contentsOf: url)
-            print("🖼️ 成功读取图片数据，大小: \(data.count) 字节")
-            
-            guard let nsImage = NSImage(data: data) else {
-                print("🖼️ ❌ 无法从数据创建NSImage")
-                return nil
-            }
-            
-            print("🖼️ ✅ 成功创建NSImage，尺寸: \(nsImage.size)")
-            return nsImage
+            return ImageDecode.fromData(data)
         } catch {
-            print("🖼️ ❌ 读取图片数据失败: \(error)")
+            print("读取封面图片失败: \(error)")
             return nil
         }
     }
 }
 
 #Preview {
-    MangaShelfView()
+    MangaShelfView().environmentObject(MangaStore())
 }
 
 extension View {

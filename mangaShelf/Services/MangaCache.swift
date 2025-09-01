@@ -20,33 +20,23 @@ class MangaCache {
             let encoder = JSONEncoder()
             let data = try encoder.encode(mangas.map { MangaCacheItem(from: $0) })
             userDefaults.set(data, forKey: cacheKey)
-            print("💾 成功缓存 \(mangas.count) 个漫画")
-        } catch {
-            print("💾 ❌ 缓存漫画失败: \(error)")
-        }
+        } catch { }
     }
     
     func loadMangas() -> [Manga] {
-        guard let data = userDefaults.data(forKey: cacheKey) else {
-            print("💾 没有找到缓存的漫画")
-            return []
-        }
+        guard let data = userDefaults.data(forKey: cacheKey) else { return [] }
         
         do {
             let decoder = JSONDecoder()
             let cacheItems = try decoder.decode([MangaCacheItem].self, from: data)
             let mangas = cacheItems.compactMap { $0.toManga() }
-            print("💾 成功加载 \(mangas.count) 个缓存漫画")
             return mangas
-        } catch {
-            print("💾 ❌ 加载缓存漫画失败: \(error)")
-            return []
-        }
+        } catch { return [] }
     }
     
     func clearCache() {
         userDefaults.removeObject(forKey: cacheKey)
-        print("💾 已清除漫画缓存")
+        
     }
 }
 
@@ -73,7 +63,13 @@ struct MangaCacheItem: Codable {
         } else {
             self.rootBookmarkData = nil
         }
-        self.subMangas = manga.subMangas?.map { MangaCacheItem(from: $0) }
+        // 避免把大量“单张图片条目”写入 UserDefaults（有 4MB 限制）
+        if let subs = manga.subMangas {
+            let filtered = subs.filter { $0.type != .image }
+            self.subMangas = filtered.map { MangaCacheItem(from: $0) }
+        } else {
+            self.subMangas = nil
+        }
     }
     
     func toManga() -> Manga? {
@@ -107,6 +103,7 @@ struct MangaCacheItem: Codable {
 enum MangaTypeCache: String, Codable {
     case folder = "folder"
     case zip = "zip"
+    case image = "image"
     case series = "series"
     
     init(from mangaType: MangaType) {
@@ -115,6 +112,8 @@ enum MangaTypeCache: String, Codable {
             self = .folder
         case .zip:
             self = .zip
+        case .image:
+            self = .image
         case .series:
             self = .series
         }
@@ -126,6 +125,8 @@ enum MangaTypeCache: String, Codable {
             return .folder
         case .zip:
             return .zip
+        case .image:
+            return .image
         case .series:
             return .series
         }

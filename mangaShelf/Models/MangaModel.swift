@@ -11,7 +11,8 @@ import SwiftUI
 enum MangaType {
     case folder
     case zip
-    case series // 系列文件夹，包含多个漫画
+    case image   // 单张图片作为一个条目
+    case series  // 系列文件夹，包含多个漫画
 }
 
 struct Manga: Identifiable, Hashable {

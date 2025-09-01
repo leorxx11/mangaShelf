@@ -90,13 +90,11 @@ class ReadingProgressManager: ObservableObject {
         }
         
         saveToDisk()
-        print("📚 更新阅读进度: \(manga.title) - \(currentPage + 1)/\(totalPages)")
     }
     
     func deleteProgress(for manga: Manga) {
         progressMap.removeValue(forKey: manga.path.path)
         saveToDisk()
-        print("📚 删除阅读进度: \(manga.title)")
     }
     
     func getAllProgress() -> [ReadingProgress] {
@@ -110,7 +108,6 @@ class ReadingProgressManager: ObservableObject {
     func clearAllProgress() {
         progressMap.removeAll()
         saveToDisk()
-        print("📚 清除所有阅读进度")
     }
 
     // MARK: - Persistence
@@ -130,7 +127,6 @@ class ReadingProgressManager: ObservableObject {
                 decoder.dateDecodingStrategy = strat
                 let list = try decoder.decode([ReadingProgress].self, from: data)
                 loaded = list
-                print("📚 从本地加载阅读进度(策略: \(strat)): \(list.count) 条")
                 break
             } catch {
                 lastError = error
@@ -142,9 +138,7 @@ class ReadingProgressManager: ObservableObject {
                 map[item.mangaPath] = item
             }
             progressMap = map
-        } else if let err = lastError {
-            print("📚 ❌ 读取阅读进度失败: \(err)")
-        }
+        } else if let _ = lastError { }
     }
 
     private func saveToDisk() {
@@ -154,8 +148,6 @@ class ReadingProgressManager: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(list)
             userDefaults.set(data, forKey: progressKey)
-        } catch {
-            print("📚 ❌ 保存阅读进度失败: \(error)")
-        }
+        } catch { }
     }
 }
